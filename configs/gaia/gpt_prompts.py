@@ -28,25 +28,32 @@ Rules:
 2. Non-terminal rounds must not include join.
 3. Tool calls must use exact shape {"kind":"tool","tool":"ExactToolName","args":[...]}.
 4. Prefer named ids for reusable intermediate results; avoid positional references.
-5. args must always be a JSON array.
-6. search_engine is the default tool for web discovery.
-7. For web questions, search first, then read the most relevant grounded page.
-8. Never pass raw search results directly into URL-reading tools when one exact URL still needs to be chosen. First use semantic_map to select one concrete URL string.
-9. If search results mainly contain listing or index pages, read the listing page first, then isolate the exact detail page.
-10. If search results do not isolate the required object, branch on object verification and replan with a better query or source.
-11. Never answer from a nearby-but-wrong page. If a page shows a mismatched date, title, source, category, or object, branch and replan instead of extracting.
-12. If a domain or URL family is blocked or repeatedly fails, abandon it for the current question and switch to another source family.
-13. If the question includes an exact date, year, document type, site, or source constraint, verify that exact constraint before extracting the answer.
-14. Preserve distinctive titles, phrases, names, and other strong anchors from the question when forming search queries.
-15. If the grounded source is a remote PDF, image, spreadsheet, archive, audio, video, or other remote file URL, first use download_file_from_url, then pass the local path to local file tools. Do not pass remote URLs directly into local file tools.
-16. Prefer code_interpreter for deterministic parsing, file logic, exact counting, and exact computation after the needed facts are already grounded.
-17. Never use code_interpreter to simulate web search, API calls, or unavailable external data.
-18. Preserve exact constraints from the question, including source, date, year, unit, precision, and final format.
-19. Default to not using semantic_map. Add it only when you need a compact typed artifact for the next step.
-20. If one tool's observation can already be passed directly into the next tool, do not insert semantic_map.
-21. For counting, ranking, comparison, or arithmetic questions, first ground the inputs, then compute deterministically.
-22. If a tool returns an error, empty output, blocked page, or contradictory evidence, do not continue blindly; branch and replan.
-23. If one grounded source is already sufficient to extract the final answer, prefer a short direct read/extract path over additional broad search.
+5. When an intermediate result will be reused later, give it a named id and reference it by that id. Avoid positional references such as $1, $2, or $3 in GAIA plans.
+6. args must always be a JSON array.
+7. search_engine is the default tool for web discovery.
+8. For web questions, search first, then read the most relevant grounded page.
+9. Never pass raw search results directly into URL-reading tools when one exact URL still needs to be chosen. First use semantic_map to select one concrete URL string.
+10. If search-result snippets already expose the exact grounded numeric operands needed for a deterministic computation from the requested source family, you may extract those operands directly and compute without forcing an extra URL-selection step.
+11. If search results mainly contain listing or index pages, read the listing page first, then isolate the exact detail page.
+12. If search results do not isolate the required object, branch on object verification and replan with a better query or source.
+13. Early branch conditions should test exact object/date/source/category grounding, contradiction, or evidence sufficiency. Do not use mere non-emptiness when exact grounding is required.
+14. Never answer from a nearby-but-wrong page. If a page shows a mismatched date, title, source, category, or object, branch and replan instead of extracting.
+15. If a domain or URL family is blocked or repeatedly fails, abandon it for the current question and switch to another source family.
+16. If the question includes an exact date, year, document type, site, or source constraint, verify that exact constraint before extracting the answer.
+17. Preserve distinctive titles, phrases, names, and other strong anchors from the question when forming search queries.
+18. If the grounded source is a remote PDF, image, spreadsheet, archive, audio, video, or other remote file URL, first use download_file_from_url, then pass the local path to local file tools. Do not pass remote URLs directly into local file tools.
+19. Prefer code_interpreter for deterministic parsing, file logic, exact counting, and exact computation after the needed facts are already grounded.
+20. Never use code_interpreter to simulate web search, API calls, or unavailable external data.
+21. Preserve exact constraints from the question, including source, date, year, unit, precision, and final format.
+22. Default to not using semantic_map. Add it only when you need a compact typed artifact for the next step.
+23. If one tool's observation can already be passed directly into the next tool, do not insert semantic_map.
+24. For counting, ranking, comparison, or arithmetic questions, first ground the inputs, then compute deterministically.
+25. If a tool returns an error, empty output, blocked page, or contradictory evidence, do not continue blindly; branch and replan.
+26. If one grounded source is already sufficient to extract the final answer, prefer a short direct read/extract path over additional broad search.
+27. For source-constrained questions, keep the evidence path closed: once the question anchors on a specific source, issue, row, date, site, or candidate set, do not drift to nearby entities or substitute a different source family unless you explicitly replan.
+28. When the final answer must be chosen from a grounded candidate set, first ground that set, then return one member of that set only.
+29. If the latest search or page evidence is off-domain, off-entity, speculative, synthetic, SEO-like, or otherwise weakly grounded, treat it as pollution and replan instead of extracting.
+30. For multi-hop questions, verify each hop's object before using it as the input to the next hop; do not let an unverified intermediate object contaminate downstream extraction.
 """
 
 
@@ -236,8 +243,10 @@ Replanning rules:
 13. If a prior extraction from the same page returned an empty value, narrow the source before repeating extraction.
 14. If the exact page/object is still unresolved, do not push raw search ambiguity into answer extraction.
 15. Once one exact URL/object is grounded, replans should usually focus on read -> extract steps for the missing field.
-16. Use semantic_map only when you need to select, extract, or normalize the next compact value.
-17. Do not output join during intermediate replans.
+16. If a prior round already grounded an exact URL/object and the missing fact is a downstream field from that object, do not restart broad search; continue from that grounded object.
+17. If a prior observation already contains a concrete page with an internal PDF/full-text/download link, continue from that existing page/link chain before launching new external discovery.
+18. Use semantic_map only when you need to select, extract, or normalize the next compact value.
+19. Do not output join during intermediate replans.
 """
 
 
@@ -289,11 +298,14 @@ OUTPUT_PROMPT = (
     "- If an observation explicitly shows a mismatched date, title, issue, revision, category, or source, treat it as contradiction and prefer Replan over Finish.\n"
     "- If the question asks for a non-URL field and the latest strongest observation is only a URL/locator (including direct PDF URL), do not Finish with that URL; Replan to read and extract the requested field.\n"
     "- For multi-source questions, finish only after each required source or evidence path is grounded.\n"
+    "- For source-constrained questions, keep the evidence path closed: if the answer must come from one exact source, issue, row, date, site, or grounded candidate set, do not substitute nearby sources or broader summaries.\n"
     "- For counting, comparison, ranking, or arithmetic questions, finish only after the operands are explicitly grounded and the result is computed deterministically.\n"
     "- When a question requires choosing from a grounded candidate set, return one member of that set only.\n"
     "- Preserve required output format, ordering, units, and title wording from the question when those constraints are grounded.\n"
     "- Do not Finish with an intermediate entity when the question still asks for a downstream attribute such as that entity's officeholder, date, count, value, or role. In that case prefer Replan unless a later observation already provides the final requested field.\n"
     "- Do not Finish from polluted or unrelated search results. If the latest search observations are off-domain, off-entity, or clearly irrelevant to the target object, Replan instead.\n"
+    "- If the answer must come from a grounded candidate set, table row, list entry, issue entry, or source-defined entity set, do not return anything outside that grounded set.\n"
+    "- If a multi-hop chain contains an unverified intermediate object, missing exact source alignment, or a broken evidence hop, prefer Replan over projecting a final answer.\n"
     "- If official pages are blocked and no alternate reachable source has been grounded yet, Replan instead of guessing from memory or weak snippets.\n"
     "- Do not guess from weak, tertiary, generic, or unsupported evidence.\n"
     "\n"

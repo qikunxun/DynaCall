@@ -16,5 +16,5 @@ CONFIGS = {
             "output_prompt": GPT_OUTPUT_PROMPT,
         },
     },
-    "max_replans": 2,
+    "max_replans": 3,
 }
