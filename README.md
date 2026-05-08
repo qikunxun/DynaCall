@@ -48,12 +48,6 @@ Common options:
 - `--model_name`: override the default model
 - `--row_number`: run one row, a comma list, or a range such as `1`, `1,3,8`, or `1-10`
 - `--logging`: print detailed execution logs
-- `--max_questions`: concurrency across questions
-- `--use_early_execution`: enable streaming planning/execution
-- `--use_function_coalescing`: enable function coalescing
-- `--cache_file`: persist cached tool results locally
-- `--gaia_dataset_path`: override the GAIA json/jsonl file
-- `--gaia_files_root`: override the GAIA attachment root
 
 ## Examples
 
